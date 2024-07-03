@@ -1,0 +1,109 @@
+#!/usr/bin/env python3
+
+import rospy
+import actionlib
+import tf
+
+import sys
+sys.path.insert(0, '/home/sergio/ros_ws/src/utec/src/functions')
+from ur5_params import *
+from ur_kinematics_functions import *
+
+from sensor_msgs.msg import JointState
+from control_msgs.msg import FollowJointTrajectoryAction, FollowJointTrajectoryGoal
+from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
+
+#ur5_control = open("/home/sergio/ros_ws/src/utec/data/ur5_prop_real_load4.txt", "w") 
+ur5_control = open("/home/sergio/ros_ws/src/utec/data/empty1.txt", "w") 
+ur5_control.truncate(0)
+
+# =============================================================
+# Configuracion articular inicial (rad)
+q = np.radians(np.array([90.0, -90.0, 90.0, -90.0, -90.0, 0.0]))
+
+# Posicion deseada
+#xd = np.array([-0.1017,  0.724,  0.341])
+#xd = np.array([-0.1246,  0.6522,  0.5965])
+xd = np.array([0.10415,  -0.7469,  0.236859])
+if check_ur_ws(xd,r_ws) == True:
+	print("Posicion deseada alcanzable")
+else:
+	print("Posicion deseada inalcanzable")
+
+# Configuracion articular deseada (rad)
+qdes = ikine(xd,q,l)
+# =============================================================
+
+q_real = np.zeros(6)
+
+#Maxmimo error admisible
+epsilon = 1e-3
+#Flag para saber si se alcanzo los valores de q deseados
+Flag_pd = False
+
+def callback(msg):
+
+	global q_real
+	
+	q_real = msg.position
+	q_real = np.asarray(q_real)
+	q_real[[0,2]] = q_real[[2,0]]
+
+if __name__ == '__main__':
+
+	rospy.init_node("ur5_control_prop_data", anonymous=True, disable_signals=True)
+	
+	rospy.Subscriber("/robot2/joint_states", JointState, callback)
+	
+	tf_listener = tf.TransformListener()
+	
+	robot_client = actionlib.SimpleActionClient('/robot2/scaled_pos_joint_traj_controller/follow_joint_trajectory', FollowJointTrajectoryAction)
+	#robot_client = actionlib.SimpleActionClient('/robot2/pos_joint_traj_controller/follow_joint_trajectory', FollowJointTrajectoryAction)
+	print("Waiting for server...")
+	robot_client.wait_for_server()
+	print("Connected to server")
+
+	joint_names = ['shoulder_pan_joint', 'shoulder_lift_joint', 'elbow_joint', 'wrist_1_joint', 'wrist_2_joint', 'wrist_3_joint']
+
+	#Configuracion articular inicial
+	Q0 = q.tolist()
+
+	g = FollowJointTrajectoryGoal()
+	g.trajectory = JointTrajectory()
+	g.trajectory.joint_names = joint_names
+
+	# Posicion articular inicial
+	g.trajectory.points = [ JointTrajectoryPoint(positions=Q0,time_from_start=rospy.Duration(1.0))]
+	robot_client.send_goal(g)
+	robot_client.wait_for_result()
+	rospy.sleep(1)
+
+	# Frecuencia del envio (en Hz)
+	freq = 100
+	rate = rospy.Rate(freq)
+	# Tiempo de muestreo
+	dt = 1.0/freq	
+	t = 5.0 + dt
+
+	#Se le asigna al Q0 la configuracion articular hallada
+	Q0 = qdes.tolist()	
+
+	g.trajectory.points = [JointTrajectoryPoint(positions=Q0,time_from_start=rospy.Duration(t))]
+	robot_client.send_goal(g)
+	
+	u = np.zeros(6)
+	
+while not rospy.is_shutdown():
+
+	#(trans,rot) = tf_listener.lookupTransform('robot2/base', 'robot2/wrist_3_link', rospy.Time(0))
+	trans = fkine(q_real,l)[0:3,3]
+	
+	t = t + dt
+	print(t)
+				
+	ur5_control.write(str(trans[0])+' '+str(trans[1])+' '+str(trans[2])+' '+str(q_real[0])+' '+str(q_real[1])+' '+str(q_real[2])+' '+str(q_real[3])+' '+str(q_real[4])+' '+str(q_real[5])+' '+str(u[0])+' '+str(u[1])+' '+str(u[2])+' '+str(u[3])+' '+str(u[4])+' '+str(u[5])+' '+str(t)+'\n ')
+	
+	# Esperar hasta la siguiente  iteracion
+	rate.sleep()
+	
+ur5_control.close()

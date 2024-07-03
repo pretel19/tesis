@@ -1,0 +1,124 @@
+#!/usr/bin/env python3
+
+import rospy
+import actionlib
+import tf
+
+import sys
+sys.path.insert(0, '/home/sergio/ros_ws/src/utec/src/functions')
+from ur5_params import *
+from ur_kinematics_functions import *
+
+from std_msgs.msg import String
+from control_msgs.msg import FollowJointTrajectoryAction, FollowJointTrajectoryGoal
+from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
+
+ur5_xyz = open("/home/sergio/ros_ws/src/utec/data/ur5_key_pos.txt", "w") 
+ur5_xyz.truncate(0)
+
+press_key = "0"
+
+increase = 0.005 #Aumento en la posicion
+xd = np.array([-0.10915, 0.4869, 0.431859]) #Posicion deseada inicial
+#xd = np.array([-0.10415,  0.7869,  0.206859])
+q0 = np.radians(np.array([-90.0, -90.0, 90.0, -90.0, -90.0, 0.0])) #Configuracion articular inicial
+
+#Aumentar la posicion en el espacio cartesiano con las teclas
+def callback(msg):
+
+    global press_key, xd, increase, q
+    press_key = msg.data
+
+    if press_key == "e" or press_key == "E":
+        xd[2] = xd[2] + increase
+        if check_ur_ws(xd,r_ws) == False:
+            xd[2] = xd[2] - increase
+    elif press_key == "q" or press_key == "Q":
+        xd[2] = xd[2] - increase
+        if check_ur_ws(xd,r_ws) == False:
+            xd[2] = xd[2] + increase
+    elif press_key == "s" or press_key == "S":
+        xd[0] = xd[0] - increase
+        if check_ur_ws(xd,r_ws) == False:
+            xd[0] = xd[0] + increase
+    elif press_key == "w" or press_key == "W":
+        xd[0] = xd[0] + increase
+        if check_ur_ws(xd,r_ws) == False:
+            xd[0] = xd[0] - increase
+    elif press_key == "d" or press_key == "D":
+        xd[1] = xd[1] - increase
+        if check_ur_ws(xd,r_ws) == False:
+            xd[1] = xd[1] + increase
+    elif press_key == "a" or press_key == "A":
+        xd[1] = xd[1] + increase
+        if check_ur_ws(xd,r_ws) == False:
+            xd[1] = xd[1] - increase
+    elif press_key == "h" or press_key == "H":
+        q = np.radians(np.array([-90.0, -90.0, 90.0, -90.0, -90.0, 0.0]))
+        xd = np.array([-0.10915, 0.4869, 0.431859])
+    else:
+        xd = xd
+
+if __name__ == '__main__':
+    
+	rospy.init_node("key_ur5_control_data", disable_signals=True)
+
+	#El nodo se suscribe al topico '\keys'
+	rospy.Subscriber("/keys", String, callback)
+
+	robot_client = actionlib.SimpleActionClient('/robot2/scaled_pos_joint_traj_controller/follow_joint_trajectory', FollowJointTrajectoryAction)
+	#robot_client = actionlib.SimpleActionClient('/robot2/pos_joint_traj_controller/follow_joint_trajectory', FollowJointTrajectoryAction)
+	print("Waiting for server...")
+	robot_client.wait_for_server()
+	print("Connected to server")
+
+	joint_names = ['shoulder_pan_joint', 'shoulder_lift_joint', 'elbow_joint', 'wrist_1_joint', 'wrist_2_joint', 'wrist_3_joint']
+
+	tf_listener = tf.TransformListener()
+
+	#Configuracion articular inicial
+	Q0 = q0.tolist()
+
+	g = FollowJointTrajectoryGoal()
+	g.trajectory = JointTrajectory()
+	g.trajectory.joint_names = joint_names
+
+	# Initial position
+	g.trajectory.points = [ JointTrajectoryPoint(positions=Q0,time_from_start=rospy.Duration(1.0))]
+	robot_client.send_goal(g)
+	robot_client.wait_for_result()
+	rospy.sleep(1)
+		
+	# Frequency (in Hz) and control period 
+	freq = 100
+	dt = 1.0/freq
+	rate = rospy.Rate(freq)
+	t = 1.0 + dt
+
+	# Initial joint configuration
+	q = copy(q0)
+
+	while not rospy.is_shutdown():
+
+		print(xd)
+
+		# Inverse kinematics
+		q = ikine(xd,q,l)
+		#Limitar valores articulares
+		q = limit_joint_pos(q,q_lim)
+
+		#Se le asigna al Q0 la configuracion articular hallada
+		Q0 = q.tolist()
+
+		g.trajectory.points = [ JointTrajectoryPoint(positions=Q0,time_from_start=rospy.Duration(t))]
+		robot_client.send_goal(g)
+		robot_client.wait_for_result()
+
+		t = t + dt
+
+		(trans,rot) = tf_listener.lookupTransform('world', 'robot2/wrist_3_link', rospy.Time(0))	
+		ur5_xyz.write(str(trans[0])+' '+str(trans[1])+' '+str(trans[2])+' '+str(t)+'\n ')
+
+		rate.sleep()
+
+ur5_xyz.close()

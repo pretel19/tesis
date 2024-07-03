@@ -1,0 +1,43 @@
+<sdf version="1.6">
+  <world name="default">
+    <include>
+      <uri>model://ground_plane</uri>
+    </include>
+    <include>
+      <uri>model://sun</uri>
+    </include>
+    
+    <include>
+      <uri>model://surgery_table</uri>
+      <pose>0.25 0 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://ur5_base</uri>
+      <name>ur5e_base</name>
+      <pose>0 0 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://ur5_base</uri>
+      <name>ur5_base</name>
+      <pose>1.7 0 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://biombo</uri>
+      <name>biombo1</name>
+      <pose>0.8 1.5 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://biombo</uri>
+      <name>biombo2</name>
+      <pose>0.8 -1.5 0 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://lamp</uri>
+      <pose>1.2 -0.6 0 0 0 1</pose>
+    </include>
+    <include>
+      <uri>model://pad</uri>
+      <pose>0.85 0 0.63 0 0 0</pose>
+    </include>              
+  </world>
+</sdf>

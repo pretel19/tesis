@@ -1,0 +1,34 @@
+#!/usr/bin/env python3
+
+import rospy
+from sensor_msgs.msg import JointState
+
+import numpy as np
+
+rospy.init_node("publish_joints")
+pub = rospy.Publisher('joint_states', JointState, queue_size=10)
+
+# Joint names
+jnames = ['shoulder_pan_joint', 'shoulder_lift_joint', 'elbow_joint',
+          'wrist_1_joint', 'wrist_2_joint', 'wrist_3_joint']
+# Joint Configuration
+q = np.radians(np.array([-90.0, -90.0, 90.0, -90.0, -90.0, 0.0]))
+
+# Object (message) whose type is JointState
+jstate = JointState()
+# Set values to the message
+jstate.header.stamp = rospy.Time.now()
+jstate.name = jnames
+# Add the head joint value (with value 0) to the joints
+jstate.position = q
+
+# Loop rate (in Hz)
+rate = rospy.Rate(100)
+# Continuous execution loop
+while not rospy.is_shutdown():
+    # Current time (needed for ROS)
+    jstate.header.stamp = rospy.Time.now()
+    # Publish the message
+    pub.publish(jstate)
+    # Wait for the next iteration
+    rate.sleep()

@@ -1,0 +1,82 @@
+#!/usr/bin/env python
+
+import rospy
+import actionlib
+import tf
+
+from control_msgs.msg import FollowJointTrajectoryAction, FollowJointTrajectoryGoal
+from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
+
+import sys
+sys.path.insert(0, '/home/sergio/ros_ws/src/utec/src/functions')
+from ur5e_params import *
+from ur_kinematics_functions import *
+
+des_pos = np.zeros(3)
+
+q0 = np.radians(np.array([90.0, -90.0, 90.0, -90.0, -90.0, 0.0]))
+
+if __name__ == '__main__':
+    
+	rospy.init_node("haptic_ur5e_control", anonymous=True, disable_signals=True)
+
+	tf_listener = tf.TransformListener()
+
+	#robot_client = actionlib.SimpleActionClient('/robot1/scaled_pos_joint_traj_controller/follow_joint_trajectory', FollowJointTrajectoryAction)
+	robot_client = actionlib.SimpleActionClient('/robot1/pos_joint_traj_controller/follow_joint_trajectory', FollowJointTrajectoryAction)
+	print("Waiting for server...")
+	robot_client.wait_for_server()
+	print("Connected to server")
+
+	joint_names = ['shoulder_pan_joint', 'shoulder_lift_joint', 'elbow_joint', 'wrist_1_joint', 'wrist_2_joint', 'wrist_3_joint']
+
+	#Configuracion articular inicial
+	Q0 = q0.tolist()
+
+	g = FollowJointTrajectoryGoal()
+	g.trajectory = JointTrajectory()
+	g.trajectory.joint_names = joint_names
+
+	# Initial position
+	g.trajectory.points = [JointTrajectoryPoint(positions=Q0,time_from_start=rospy.Duration(1.0))]
+	robot_client.send_goal(g)
+	robot_client.wait_for_result()
+	rospy.sleep(1)
+
+	# Frequency (in Hz) and control period 
+	freq = 100
+	dt = 1.0/freq
+	rate = rospy.Rate(freq)
+	t = 1.0 + dt
+
+	# Initial joint configuration
+	q = copy(q0)
+
+	while not rospy.is_shutdown():
+
+		(trans,rot) = tf_listener.lookupTransform('haptic_right/touch_base', 'haptic_right/tip', rospy.Time(0))
+		haptic_pos = np.array(trans)		
+
+		des_pos[0] = 3.5*haptic_pos[0]
+		des_pos[1] = -3*haptic_pos[1]
+		des_pos[2] = 2.5*haptic_pos[2]
+
+		print des_pos
+
+		if check_ur_ws(des_pos,r_ws):
+
+			# Inverse kinematics
+			q = ikine(des_pos,q,l)
+			#Limitar valores articulares
+			q = limit_joint_pos(q,q_lim)
+			
+			#Se le asigna al Q0 la configuracion articular hallada
+			Q0 = q.tolist()
+
+			g.trajectory.points = [JointTrajectoryPoint(positions=Q0,time_from_start=rospy.Duration(t))]
+			robot_client.send_goal(g)
+			robot_client.wait_for_result()
+
+		t = t + dt
+        
+		rate.sleep()

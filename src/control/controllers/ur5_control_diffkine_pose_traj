@@ -1,0 +1,158 @@
+#!/usr/bin/env python3
+
+import rospy
+import actionlib
+
+from sensor_msgs.msg import JointState
+from control_msgs.msg import FollowJointTrajectoryAction, FollowJointTrajectoryGoal
+from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
+
+import sys
+sys.path.insert(0, '/home/sergio/ros_ws/src/utec/src/functions')
+from ur5_params import *
+from ur_kinematics_functions import *
+
+from tf.transformations import euler_from_quaternion, quaternion_from_euler
+
+import scipy.io
+
+ur5_control = open("/home/sergio/ros_ws/src/utec/data/ur5_diffkine_trajectory.txt", "w") 
+ur5_control.truncate(0)
+
+# Initial configuration
+#q0  = np.radians(np.array([-90.0, -90.0, 90.0, -90.0, -90.0, 0.0]))
+q0  = np.radians(np.array([-90.73, -34.63, 37.56, -92.93, -89.45, 1.42]))
+q0[5] = -1.40
+
+#Trayectoria
+idx = 0
+idx_max = 20000
+#Trayectoria cartesiana
+traj_data = scipy.io.loadmat('/home/sergio/ros_ws/src/utec/data/traj_20000_q6.mat')
+X = traj_data['x'][0]
+Y = traj_data['y'][0]
+Z = traj_data['z'][0]
+TH = traj_data['theta'][0]
+
+#Trayectoria articular
+pos_traj = np.zeros([idx_max,3])
+rot_traj = np.zeros([idx_max,4])
+rot_traj_deg = np.zeros([idx_max,3])
+for i in range(idx_max):
+	pos_traj[i] = np.array([X[i],Y[i],Z[i]])
+	Rd = np.array([np.pi,0,0])
+	rot_traj[i] = quaternion_from_euler(Rd[0], Rd[1], Rd[2], 'sxyz')
+	rot_traj_deg[i] = np.degrees(Rd)
+
+q_real = np.zeros(6)
+def callback(msg):
+
+	global q_real
+	
+	q_real = msg.position
+	q_real = np.asarray(q_real)
+	q_real[[0,2]] = q_real[[2,0]]
+
+if __name__ == "__main__":
+
+	rospy.init_node("ur5_control_diffkine_pose_traj")
+	
+	rospy.Subscriber("/robot2/joint_states", JointState, callback)
+		
+	#robot_client = actionlib.SimpleActionClient('/robot2/scaled_pos_joint_traj_controller/follow_joint_trajectory', FollowJointTrajectoryAction)
+	robot_client = actionlib.SimpleActionClient('/robot2/pos_joint_traj_controller/follow_joint_trajectory', FollowJointTrajectoryAction)
+	print("Waiting for server...")
+	robot_client.wait_for_server()
+	print("Connected to server")
+
+	joint_names = ['shoulder_pan_joint', 'shoulder_lift_joint', 'elbow_joint', 'wrist_1_joint', 'wrist_2_joint', 'wrist_3_joint']
+
+	#Configuracion articular inicial
+	Q0 = q0.tolist()
+
+	g = FollowJointTrajectoryGoal()
+	g.trajectory = JointTrajectory()
+	g.trajectory.joint_names = joint_names
+
+	# Posicion articular inicial
+	g.trajectory.points = [JointTrajectoryPoint(positions=Q0,time_from_start=rospy.Duration(1.0))]
+	robot_client.send_goal(g)
+	robot_client.wait_for_result()
+	rospy.sleep(3)
+	
+	# Frecuencia del envio (en Hz)
+	freq = 2000
+	rate = rospy.Rate(freq)
+	# Tiempo de muestreo
+	dt = 1.0/freq	
+	t = 1.0 + dt
+	
+	# Initial joint configuration
+	q = copy(q0)
+	
+	#Constante de ganancia cinematica
+	k = 100
+
+	while not rospy.is_shutdown():
+
+		if idx < idx_max:
+
+			# Desired pose
+			xd = pos_traj[idx]
+			Qd = rot_traj[idx]
+			#pd = np.concatenate((pos_traj[idx],rot_traj[idx]))
+			idx = idx + 1
+			#print(idx)
+			# Jacobiano para la configuracion actual q
+			J = jacobian_pose(q_real,l)
+			# Cinematica directa dada la configuracion actual q
+			T = fkine(q_real,l)
+			# Error en la posicion
+			x = T[0:3,3]
+			e_pos = x-xd
+			#Error en la orientacion
+			Q = R.from_matrix(T[0:3,0:3]).as_quat()
+			e_o = calc_eo_quat(Q,Qd)
+			#Posicion y orientacion actual
+			pa = TF2xyzquat(T)
+			#Error de posicion y orientacion
+			e = np.concatenate((e_pos,-e_o))
+			print(np.linalg.norm(e))
+			
+			# Derivada del error
+			de = -k*e
+
+			# Variacion de la configuracion articular
+			Jinv = Jacob_inv_singular(J)
+			#Jinv = np.linalg.pinv(J)
+			dq = Jinv.dot(de)
+			#print(dq)
+
+			# Integracion para obtener la nueva configuracion articular			
+			q = q_real + dt*dq
+
+			#Limitar valores articulares
+			q = limit_joint_pos(q,q_lim)
+
+			#Se le asigna al Qdes la configuracion articular hallada
+			Qdes = q.tolist()
+
+			g.trajectory.points = [JointTrajectoryPoint(positions=Qdes,time_from_start=rospy.Duration(t))]
+			robot_client.send_goal(g)
+
+		t = t + dt
+
+		trans = fkine(q_real,l)[0:3,3]
+		rot = fkine(q_real,l)[0:3,0:3]
+		
+		rot = R.from_matrix(rot).as_euler('xyz', degrees=True)
+		
+		#rot = R.from_matrix(rot).as_quat()
+		#rot = euler_from_quaternion(rot, 'sxyz')
+		#rot = np.degrees(rot)
+					
+		ur5_control.write(str(trans[0])+' '+str(trans[1])+' '+str(trans[2])+' '+str(pos_traj[idx][0])+' '+str(pos_traj[idx][1])+' '+str(pos_traj[idx][2])+' '+str(rot[0])+' '+str(rot[1])+' '+str(rot[2])+' '+str(rot_traj_deg[idx][0])+' '+str(rot_traj_deg[idx][1])+' '+str(rot_traj_deg[idx][2])+' '+str(q_real[0])+' '+str(q_real[1])+' '+str(q_real[2])+' '+str(q_real[3])+' '+str(q_real[4])+' '+str(q_real[5])+' '+str(q[0])+' '+str(q[1])+' '+str(q[2])+' '+str(q[3])+' '+str(q[4])+' '+str(q[5])+' '+str(t)+'\n ')
+
+		rate.sleep()
+
+ur5_control.close()

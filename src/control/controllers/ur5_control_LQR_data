@@ -1,0 +1,215 @@
+#!/usr/bin/env python3
+
+import rospy
+import actionlib
+import tf
+import control as ct
+
+import sys
+sys.path.insert(0, '/home/sergio/ros_ws/src/utec/src/functions')
+from ur5_params import *
+from ur_kinematics_functions import *
+from ur5_sliding_functions import *
+
+from sensor_msgs.msg import JointState
+from control_msgs.msg import FollowJointTrajectoryAction, FollowJointTrajectoryGoal
+from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
+
+ur5_control = open("/home/sergio/ros_ws/src/utec/data/ur5_dininv_real_load4.txt", "w") 
+ur5_control.truncate(0)
+
+# =============================================================
+# Configuracion articular inicial (en radianes)
+q = np.radians(np.array([-90.0, -90.0, 90.0, -90.0, -90.0, 0.0]))
+# Velocidad inicial
+dq = np.array([0., 0., 0., 0., 0., 0.])
+# Aceleracion inicial
+ddq = np.array([0., 0., 0., 0., 0., 0.])
+
+# Posicion deseada
+xd = np.array([-0.1017,  0.724,  0.341])
+#xd = np.array([-0.1246,  0.6522,  0.5965])
+if check_ur_ws(xd,r_ws) == True:
+	print("Posicion deseada alcanzable")
+else:
+	print("Posicion deseada inalcanzable")
+
+# Configuracion articular deseada (rad)
+qdes = ikine(xd,q,l)
+# Velocidad articular deseada (rad/s)
+dqdes = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+# Aceleracion articular deseada (rad/s2)
+ddqdes = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+# =============================================================
+
+# Modelo RBDL
+modelo = rbdl.loadModel('/home/sergio/ros_ws/src/utec/urdf/ur5_xacro_mod.urdf')
+ndof   = modelo.q_size     # Grados de libertad
+zeros = np.zeros(ndof)     # Vector de ceros
+
+# Arrays numpy
+zeros = np.zeros(ndof)          # Vector de ceros
+grav     = np.zeros(ndof)       # Para la gravedad
+c     = np.zeros(ndof)          # Para el vector de Coriolis+centrifuga
+Mtemp = np.zeros(ndof)          # Vector temporal para la matriz de inercia
+M     = np.zeros([ndof, ndof])  # Para la matriz de inercia
+e     = np.eye(6)               # Vector identidad
+
+q_real = np.zeros(ndof)
+
+
+Qx = 1.2*np.array([1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
+Qx = np.diag(Qx)	
+Qu = 1*np.array([1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
+Qu = np.diag(Qu)
+
+#K, _, _ = ct.lqr(A, B, Qx, Qu)
+def callback(msg):
+
+	global q_real
+	
+	q_real = msg.position
+	q_real = np.asarray(q_real)
+	q_real[[0,2]] = q_real[[2,0]]
+
+if __name__ == '__main__':
+
+	rospy.init_node("ur5_control_dininv_data", anonymous=True, disable_signals=True)
+	
+	rospy.Subscriber("/robot2/joint_states", JointState, callback)
+	
+	#robot_client = actionlib.SimpleActionClient('/robot2/scaled_pos_joint_traj_controller/follow_joint_trajectory', FollowJointTrajectoryAction)
+	robot_client = actionlib.SimpleActionClient('/robot2/pos_joint_traj_controller/follow_joint_trajectory', FollowJointTrajectoryAction)
+	print("Waiting for server...")
+	robot_client.wait_for_server()
+	print("Connected to server")
+
+	joint_names = ['shoulder_pan_joint', 'shoulder_lift_joint', 'elbow_joint', 'wrist_1_joint', 'wrist_2_joint', 'wrist_3_joint']
+
+	tf_listener = tf.TransformListener()
+
+	#Configuracion articular inicial
+	Q0 = q.tolist()
+
+	g = FollowJointTrajectoryGoal()
+	g.trajectory = JointTrajectory()
+	g.trajectory.joint_names = joint_names
+
+	# Initial position
+	g.trajectory.points = [JointTrajectoryPoint(positions=Q0,time_from_start=rospy.Duration(1.0))]
+	robot_client.send_goal(g)
+	robot_client.wait_for_result()
+	rospy.sleep(1)
+
+	# Frecuencia del envio (en Hz)
+	freq = 100
+	rate = rospy.Rate(freq)
+	# Tiempo de muestreo
+	dt = 1.0/freq	
+	t = 1.0 + dt
+
+	# Simulador dinamico del robot
+	robot = Robot(q, dq, ndof, dt)
+
+	# Se definen las ganancias del controlador
+	valores = 20*np.array([1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
+	Kp = np.diag(valores)
+	Kd = 2*np.sqrt(Kp)
+
+	#Maxmimo error admisible
+	epsilon = 1e-3
+	#Flag para saber si se alcanzo los valores de q deseados
+	Flag_pd = False
+
+while not rospy.is_shutdown():
+
+	#Se verifica si se alcanzo la posicion deseada
+	if Flag_pd == False:
+
+		# Leer valores del simulador
+		q  = robot.read_joint_positions()
+		dq = robot.read_joint_velocities()
+
+		#Error de las articulaciones
+		error = qdes - q 
+		#print("Error: {}".format(np.round(np.linalg.norm(error),4))); 
+
+		#Activar Flag si el error es menor al admisible
+		if (np.linalg.norm(error)<epsilon):
+			Flag_pd = True
+			#print("Posicion deseada alcanzada")
+		
+		else:
+
+			# Control dinamico
+
+			#Vector gravedad
+			rbdl.InverseDynamics(modelo, q, zeros, zeros, grav)
+			#Vector de fuerza centrifuga y Coriolis
+			rbdl.InverseDynamics(modelo, q, dq, zeros, c)
+			c = c-grav
+			#Matriz de inercia
+			for i in range(ndof):
+				rbdl.InverseDynamics(modelo, q, zeros, e[i], Mtemp)
+				M[:,i] = Mtemp - grav
+
+
+			#print(c)
+			dqi = q.reshape((6,1))
+			C = c.reshape((6,1)).dot(np.linalg.pinv(dqi))
+			A = -np.linalg.pinv(M).dot(C)
+			B = np.linalg.pinv(M)
+
+
+			K, S, E = ct.lqr(A, B, Qx, Qu)
+			print(K)
+
+			u = -np.dot(K,q-qdes) + grav #Ley de control
+			#q = q + dt*dq
+			#q = limit_joint_pos(q,q_lim)
+			
+			# Simulacion del robot
+			robot.send_command(u)
+			uq  = robot.read_joint_positions()
+
+			#Se le asigna al Q0 la configuracion articular hallada
+			Q0 = uq.tolist()
+
+			g.trajectory.points = [JointTrajectoryPoint(positions=Q0,time_from_start=rospy.Duration(t))]
+			robot_client.send_goal(g)
+			#robot_client.wait_for_result()
+
+		t = t + dt
+		#print(t)
+		
+		#(trans,rot) = tf_listener.lookupTransform('robot2/base', 'robot2/wrist_3_link', rospy.Time(0))
+		trans = fkine(q_real,l)[0:3,3]
+		print(np.linalg.norm(xd-trans))
+				
+		ur5_control.write(str(trans[0])+' '+str(trans[1])+' '+str(trans[2])+' '+str(q_real[0])+' '+str(q_real[1])+' '+str(q_real[2])+' '+str(q_real[3])+' '+str(q_real[4])+' '+str(q_real[5])+' '+str(u[0])+' '+str(u[1])+' '+str(u[2])+' '+str(u[3])+' '+str(u[4])+' '+str(u[5])+' '+str(t)+'\n ')
+		
+		# Esperar hasta la siguiente  iteracion
+		rate.sleep()
+
+	else:
+
+		#Se le asigna al Q0 la configuracion articular hallada
+		#Q0 = q.tolist()
+
+		#g.trajectory.points = [JointTrajectoryPoint(positions=Q0,time_from_start=rospy.Duration(t))]
+		#robot_client.send_goal(g)
+		#robot_client.wait_for_result()
+
+		t = t + dt
+		#print(t)
+		
+		#(trans,rot) = tf_listener.lookupTransform('robot2/base', 'robot2/wrist_3_link', rospy.Time(0))
+		trans = fkine(q_real,l)[0:3,3]
+		print(np.linalg.norm(xd-trans))
+
+		ur5_control.write(str(trans[0])+' '+str(trans[1])+' '+str(trans[2])+' '+str(q_real[0])+' '+str(q_real[1])+' '+str(q_real[2])+' '+str(q_real[3])+' '+str(q_real[4])+' '+str(q_real[5])+' '+str(u[0])+' '+str(u[1])+' '+str(u[2])+' '+str(u[3])+' '+str(u[4])+' '+str(u[5])+' '+str(t)+'\n ')		
+		
+		# Esperar hasta la siguiente  iteracion
+		rate.sleep()
+		
+ur5_control.close()

@@ -1,0 +1,15 @@
+<?xml version="1.0"?>
+<launch>
+
+  <include file="$(find utec)/launch/real/ur5_bringup_mod.launch" ns="robot2">
+  	<arg name="robot_ip" value="192.168.10.104"/>
+  	<arg name="reverse_ip" value="192.168.10.102"/>
+  	<arg name="reverse_port" value="50001"/>
+  	<arg name="script_sender_port" value="50002"/>
+	<arg name="trajectory_port" value="50003"/>
+	<arg name="tf_prefix" value="robot2"/>
+  </include>
+
+  <node name="robot2_tf_world" pkg="tf" type="static_transform_publisher" args="1.7 0 0.635 -1.571 0 0 /world /robot2/base_link 100" />
+
+</launch>

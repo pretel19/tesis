@@ -1,0 +1,215 @@
+#!/usr/bin/env python3
+
+import rospy
+import actionlib
+import tf
+
+from sensor_msgs.msg import JointState
+from control_msgs.msg import FollowJointTrajectoryAction, FollowJointTrajectoryGoal
+from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
+
+import sys
+sys.path.insert(0, '/home/sergio/ros_ws/src/utec/src/functions')
+from ur5_params import *
+from ur_kinematics_functions import *
+from ur5_sliding_functions import *
+
+import scipy.io
+
+ur5_control = open("/home/sergio/ros_ws/src/utec/data/ur5_sliding_ga_traj_sim_pose.txt", "w") 
+ur5_control.truncate(0)
+
+#Generar trayectoria cartesiana
+traj_data = scipy.io.loadmat('/home/sergio/ros_ws/src/utec/data/traj2_25000_q6.mat')
+X = traj_data['x'][0]
+Y = traj_data['y'][0]
+Z = traj_data['z'][0]
+TH = traj_data['theta'][0]
+
+#Datos
+idx = 0
+idx_max = X.shape[0]
+#Tiempo maximo
+t_max = 10
+# Frecuencia del envio (en Hz)
+freq = idx_max/t_max
+# Tiempo de muestreo
+dt = 1.0/freq
+
+# Configuracion articular inicial (rad)
+q = np.radians(np.array([-90.0, -90.0, 90.0, -90.0, -90.0, 0.0]))
+# Velocidad articular inicial (rad/s)
+dq = np.array([0., 0., 0., 0., 0., 0.])
+
+#Almacenar trayectoria articular
+qdes_traj = np.zeros([idx_max,6])
+dqdes_traj = np.zeros([idx_max,6])
+ddqdes_traj = np.zeros([idx_max,6])
+#Almacenar trayectoria cartesiana
+pos_traj = np.zeros([idx_max,3])
+rot_traj_deg = np.zeros([idx_max,3])
+#Generar trayectoria articular
+for i in range(idx_max):
+	xd = np.array([X[i],Y[i],Z[i]])
+	pos_traj[i] = xd
+	qdes_traj[i] = ikine(xd,q,l)
+	qdes_traj[i][5] = TH[i]
+	dqdes_traj[i] = (qdes_traj[i] - q)/dt
+	ddqdes_traj[i] = (dqdes_traj[i] - dq)/dt
+	q = qdes_traj[i]
+	dq = dqdes_traj[i]
+#Velocidades y aceleraciones iniciales y finales = 0
+dqdes_traj[0] = np.zeros(6)
+dqdes_traj[idx_max-1] = np.zeros(6)
+ddqdes_traj[0] = np.zeros(6)
+ddqdes_traj[idx_max-1] = np.zeros(6)
+
+# Configuracion articular inicial (rad)
+q = qdes_traj[0]
+# Velocidad articular inicial (rad/s)
+dq = dqdes_traj[0]
+# Aceleracion inicial (rad/s2)
+ddq = ddqdes_traj[0]
+
+# Modelo RBDL
+modelo = rbdl.loadModel('/home/sergio/ros_ws/src/utec/urdf/ur5_xacro_mod.urdf')
+ndof   = modelo.q_size     # Grados de libertad
+
+# Arrays numpy para almacenar el modelo dinamico
+b     = np.zeros(ndof)          # Para el vector de efectos no lineales
+M     = np.zeros([ndof, ndof])  # Para la matriz de inercia
+
+# Simulador dinamico del robot
+robot = Robot(q, dq, ddq, ndof, dt)
+
+# Parametros del controlador por modo deslizante
+vlambd = 100000*np.array([1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
+lambd = np.diag(vlambd)	
+eta = 2500
+phi = 0.01
+alpha = 1.0
+
+#Posiciones y velocidades articualares reales
+q_real = np.zeros(ndof)
+dq_real = np.zeros(ndof)
+
+def callback(msg):
+
+	global q_real, dq_real
+	
+	q_real = msg.position
+	q_real = np.asarray(q_real)
+	q_real[[0,2]] = q_real[[2,0]]
+
+	dq_real = msg.velocity
+	dq_real = np.asarray(dq_real)
+	dq_real[[0,2]] = dq_real[[2,0]]
+
+if __name__ == '__main__':
+
+	rospy.init_node("ur5_control_sliding_traj_pose_data", anonymous=True, disable_signals=True)
+	
+	rospy.Subscriber("/robot2/joint_states", JointState, callback)
+	
+	tf_listener = tf.TransformListener()
+	
+	#robot_client = actionlib.SimpleActionClient('/robot2/scaled_pos_joint_traj_controller/follow_joint_trajectory', FollowJointTrajectoryAction)
+	robot_client = actionlib.SimpleActionClient('/robot2/pos_joint_traj_controller/follow_joint_trajectory', FollowJointTrajectoryAction)
+	print("Waiting for server...")
+	robot_client.wait_for_server()
+	print("Connected to server")
+
+	joint_names = ['shoulder_pan_joint', 'shoulder_lift_joint', 'elbow_joint', 'wrist_1_joint', 'wrist_2_joint', 'wrist_3_joint']
+
+	#Configuracion articular inicial
+	Q0 = q.tolist()
+
+	g = FollowJointTrajectoryGoal()
+	g.trajectory = JointTrajectory()
+	g.trajectory.joint_names = joint_names
+
+	# Posicion articular inicial
+	g.trajectory.points = [JointTrajectoryPoint(positions=Q0,time_from_start=rospy.Duration(1.0))]
+	robot_client.send_goal(g)
+	robot_client.wait_for_result()
+	rospy.sleep(1)
+
+	rate = rospy.Rate(freq)
+	t = 1.0 + dt
+	
+	while not rospy.is_shutdown():
+		
+		if idx < idx_max:
+
+			# Configuracion articular deseada (rad)
+			qdes = qdes_traj[idx]
+			rot_des = fkine(qdes,l)[0:3,0:3]
+			rot_des = R.from_matrix(rot_des).as_euler('zyx', degrees=True)
+			# Velocidad articular deseada (rad/s)
+			#dqdes = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+			dqdes = dqdes_traj[idx]
+			# Aceleracion articular deseada (rad/s2)
+			#ddqdes = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+			ddqdes = ddqdes_traj[idx]
+	
+			if idx < idx_max-1:
+				idx = idx + 1
+				print("i: ", idx)
+				#print("qdes: ", qdes)
+				#print("dqdes: ", dqdes)
+				#print("ddqdes: ", ddqdes)
+				#print(" ")
+			else:
+				idx = idx_max - 1
+
+			# Leer valores del simulador dinamico
+			q = q_real
+			dq = dq_real
+			robot.update_q(q, dq)
+
+			#Error de posicion y velocidad de las articulaciones
+			err = qdes - q
+			derr = dqdes - dq
+			
+			# Control por modo deslizante
+
+			#Matriz de inercia
+			rbdl.CompositeRigidBodyAlgorithm(modelo, q, M)
+			#Vector de efectos no lineales
+			rbdl.NonlinearEffects(modelo, q, dq, b)
+
+			# Superficie de deslizamiento
+			s = derr + np.dot(lambd,err)
+
+			# Parametro k			
+			k = eta + abs(alpha*np.dot(M,(ddqdes-np.dot(lambd,derr))) + alpha*b)
+			#k = 1
+
+			# Esfuerzo de control
+			u = b + np.dot(M,(ddqdes+s+k*np.sign(s)))
+
+			# Simulacion dinamica del robot	
+			uq = robot.torque_to_pos(u)
+			
+			#Se le asigna al q_p la configuracion articular hallada
+			q_u = uq.tolist()
+				
+			g.trajectory.points = [JointTrajectoryPoint(positions=q_u,time_from_start=rospy.Duration(t))]
+			robot_client.send_goal(g)
+			#robot_client.wait_for_result()
+
+		t = t + dt
+		print(t)
+		print(" ")
+		
+		trans = fkine(q_real,l)[0:3,3]
+		rot = fkine(q_real,l)[0:3,0:3]
+		rot = R.from_matrix(rot).as_euler('zyx', degrees=True)
+					
+		ur5_control.write(str(trans[0])+' '+str(trans[1])+' '+str(trans[2])+' '+str(pos_traj[idx][0])+' '+str(pos_traj[idx][1])+' '+str(pos_traj[idx][2])+' '+str(rot[0])+' '+str(rot[1])+' '+str(rot[2])+' '+str(rot_des[0])+' '+str(rot_des[1])+' '+str(rot_des[2])+' '+str(t)+'\n ')
+		
+		# Esperar hasta la siguiente  iteracion
+		rate.sleep()
+		
+#robot_client.cancel_all_goals()
+ur5_control.close()

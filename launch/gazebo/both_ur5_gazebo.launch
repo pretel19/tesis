@@ -1,0 +1,103 @@
+<?xml version="1.0"?>
+<launch>
+
+  <!-- Gazebo parameters -->
+  <arg name="paused" default="true" doc="Starts Gazebo in paused mode" />
+  <arg name="gui" default="true" doc="Starts Gazebo gui" />
+
+  <!-- Start Gazebo and load the empty world if requested to do so -->
+  <include file="$(find gazebo_ros)/launch/empty_world.launch">
+    <!-- arg name="world_name" value="worlds/empty.world"/-->
+    <arg name="world_name" default="$(find utec)/worlds/surgery_station.world"/>
+    <arg name="paused" value="$(arg paused)"/>
+    <arg name="gui" value="$(arg gui)"/>
+  </include>
+
+<group ns="robot1">
+
+  <!-- Send robot urdf to parameter server -->
+  <param name="/robot1/robot_description" command="$(find xacro)/xacro $(find utec)/urdf/ur5e.xacro"/>
+   
+  <!-- Spawn the model loaded earlier in the simulation just started -->
+  <node name="spawn_gazebo_model_1" pkg="gazebo_ros" type="spawn_model"
+    args="
+      -urdf
+      -param robot_description
+      -model ur5e_robot
+      -x 0
+      -y 0
+      -z 0.63
+      -Y -1.571
+      -J shoulder_pan_joint 1.571
+      -J shoulder_lift_joint -1.571
+      -J elbow_joint 1.571
+      -J wrist_1_joint -1.571
+      -J wrist_2_joint -1.571
+      -J wrist_3_joint 0.0"
+    output="screen" respawn="false" />
+
+  <!-- Robot state publisher -->
+  <node pkg="robot_state_publisher" type="robot_state_publisher" name="robot1_state_publisher">
+    <param name="publish_frequency" type="double" value="500" />
+    <param name="tf_prefix" value="robot1" />
+  </node>
+
+<node name="robot1_tf_world" pkg="tf" type="static_transform_publisher" args="0 0 0.63 -1.571 0 0 /world /robot1/world 100" />
+
+</group>
+
+<group ns="robot2">
+
+  <!-- Send robot urdf to parameter server -->
+  <param name="/robot2/robot_description" command="$(find xacro)/xacro $(find utec)/urdf/ur5.xacro"/>
+   
+  <!-- Spawn the model loaded earlier in the simulation just started -->
+  <node name="spawn_gazebo_model_2" pkg="gazebo_ros" type="spawn_model"
+    args="
+      -urdf
+      -param robot_description
+      -model ur5_robot
+      -x 1.7
+      -y 0
+      -z 0.635
+      -Y -1.571
+      -J shoulder_pan_joint -1.571
+      -J shoulder_lift_joint -1.571
+      -J elbow_joint 1.571
+      -J wrist_1_joint -1.571
+      -J wrist_2_joint -1.571
+      -J wrist_3_joint 0.0
+      -unpause"
+    output="screen" respawn="false" />
+
+  <!-- Robot state publisher -->
+  <node pkg="robot_state_publisher" type="robot_state_publisher" name="robot2_state_publisher">
+    <param name="publish_frequency" type="double" value="125" />
+    <param name="tf_prefix" value="robot2" />
+  </node>
+
+<node name="robot2_tf_world" pkg="tf" type="static_transform_publisher" args="1.7 0 0.635 -1.571 0 0 /world /robot2/world 100" />
+
+</group>
+
+<rosparam ns="robot1" file="$(find ur_gazebo)/config/ur5e_controllers.yaml" command="load"/>
+
+<node ns="robot1" name="robot1_controller_spawner" pkg="controller_manager" type="spawner"             
+	      output="screen" respawn="false"
+	      args="joint_state_controller pos_joint_traj_controller" /> 
+
+<node ns="robot1" name="robot1_stopped_spawner" pkg="controller_manager" type="spawner" 
+	    output="screen" respawn="false"
+	    args="--stopped joint_group_pos_controller"/>
+	    
+<rosparam ns="robot2" file="$(find ur_gazebo)/config/ur5_controllers.yaml" command="load"/>
+
+<node ns="robot2" name="robot2_controller_spawner" pkg="controller_manager" type="spawner"             
+	      output="screen" respawn="false"
+	      args="joint_state_controller pos_joint_traj_controller" /> 
+
+<node ns="robot2" name="robot2_stopped_spawner" pkg="controller_manager" type="spawner" 
+	    output="screen" respawn="false"
+	    args="--stopped joint_group_pos_controller"/> 
+
+</launch>

@@ -1,0 +1,19 @@
+<?xml version="1.0"?>
+
+<launch>
+
+<group ns="haptic_left">
+
+  <param name="/haptic_left/robot_description" command="cat $(find omni_description)/urdf/omni.urdf" />
+
+  <node pkg="robot_state_publisher" type="robot_state_publisher" name="hapticL_robot_state_publisher">
+    <param name="tf_prefix" value="haptic_left" />
+  </node>
+
+  <node name="omni_left" pkg="omni_common" type="omni" output="screen" />
+     
+  <node name="hapticL_tf_world" pkg="tf" type="static_transform_publisher" args="1.65 -1.0 0.6 1.571 0 0 /world /haptic_left/world 100"/>
+     
+</group>
+
+</launch>

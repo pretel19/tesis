@@ -1,0 +1,87 @@
+#!/usr/bin/env python3
+
+import rospy
+from nav_msgs.msg import Odometry
+from geometry_msgs.msg import Twist
+import numpy as np
+
+# Files for the logs
+turtlebot_xyz = open("/home/sergio/ros_ws/src/utec/src/tests/pose.txt", "w")
+turtlebot_xyz.truncate(0)
+
+#Posicion del robot en x,y
+x_pos = 0
+y_pos = 0
+#Orientacion del robot en cuaternion
+x_or = 0
+y_or = 0
+z_or = 0
+w_or = 0
+#Angulo de orientacion asociado al cuaternion
+th = 0
+
+linear_vel_x = 0
+ang_vel_z = 0
+
+def get_ang_from_Q(x,y,z,w,units='r'):
+	#Parte vectorial del cuaternion
+	e = np.array([x,y,z])
+	#Norma de la parte vectorial
+	norm_e = np.linalg.norm(e)
+	#Angulo de orientacion asociado al cuaternion
+	th = 2*np.arctan2(norm_e,w)
+	#Eje de giro asocidado al cuaternion
+	u = e/norm_e
+	#Normalizar angulo de orientacion (de 0 a 180 y de -180 a 0)
+	
+	if u[2] < 0:
+		th = -th + 2*np.pi
+	if th > np.pi:
+		th = -(2*np.pi-th)
+	
+	#Convetir angulo de orientacion a degrees
+	if units == 'd':
+		th = np.rad2deg(th)
+	return th
+
+def callback1(msg):
+
+	global x_pos, y_pos, x_or, y_or, z_or, w_or, th
+	
+	#Posicion del robot en x,y
+	x_pos = msg.pose.pose.position.x
+	y_pos = msg.pose.pose.position.y
+	#Orientacion del robot en cuaternion
+	x_or = msg.pose.pose.orientation.x
+	y_or = msg.pose.pose.orientation.y
+	z_or = msg.pose.pose.orientation.z
+	w_or = msg.pose.pose.orientation.w
+	#Angulo de orientacion asociado al cuaternion
+	th = get_ang_from_Q(x_or,y_or,z_or,w_or,'r')
+	#print(th)
+	
+def callback2(msg):
+
+	global linear_vel_x, ang_vel_z
+
+	linear_vel_x = msg.linear.x
+	ang_vel_z = msg.angular.z
+	#print(linear_vel_x)
+
+if __name__ == '__main__':
+	# Inicializar nodo
+	rospy.init_node("turtlebot_pose_info")
+	#El nodo se suscribe al topico /odom
+	rospy.Subscriber("odom", Odometry, callback1)
+	rospy.Subscriber("cmd_vel", Twist, callback2)
+
+	# Frecuencia del envio (en Hz)
+	freq = 100
+	rate = rospy.Rate(freq)
+	
+	while not rospy.is_shutdown():
+
+		turtlebot_xyz.write(str(x_pos)+' '+str(y_pos)+' '+str(th)+' '+str(linear_vel_x)+' '+str(ang_vel_z)+'\n ')
+		rate.sleep()
+	
+turtlebot_xyz.close()

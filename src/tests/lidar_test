@@ -1,0 +1,24 @@
+#!/usr/bin/env python3
+
+import rospy
+import tf
+
+x = 0
+y = 0
+th = 0
+
+if __name__ == '__main__':
+
+	rospy.init_node('fixed_tf_broadcaster')
+	br = tf.TransformBroadcaster()
+	rate = rospy.Rate(100.0)
+
+	while not rospy.is_shutdown():
+
+		x = x + 0.001
+		y = y + 0.002
+		th = th + 0.0015
+
+		br.sendTransform((x, y, 0.08), tf.transformations.quaternion_from_euler(0, 0, th),rospy.Time.now(),"base_link","odom")
+
+		rate.sleep()
